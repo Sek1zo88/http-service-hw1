@@ -57,4 +57,16 @@ public abstract class BaseHandler implements HttpHandler {
         }
         return params;
     }
+
+    protected <T> T parseBody(HttpExchange exchange, Class<T> clazz) {
+        try {
+            T obj = mapper.readValue(exchange.getRequestBody(), clazz);
+            if (obj == null) {
+                throw new IllegalArgumentException("Тело запроса пустое или некорректное");
+            }
+            return obj;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Некорректный формат JSON: " + e.getMessage());
+        }
+    }
 }
