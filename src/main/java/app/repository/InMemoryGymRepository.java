@@ -8,10 +8,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.springframework.stereotype.Repository;
+
 import app.domain.Client;
 import app.domain.Trainer;
 
-public final class InMemoryGymRepository {
+@Repository
+public final class InMemoryGymRepository implements GymRepository {
     private final Map<String, Trainer> trainers = new HashMap<>();
     private final Map<String, Client> clients = new HashMap<>();
     private final Map<String, Set<String>> bookings = new HashMap<>();
