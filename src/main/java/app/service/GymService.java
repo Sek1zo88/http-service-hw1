@@ -1,133 +1,141 @@
 package app.service;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
-
 import app.domain.Client;
 import app.domain.Trainer;
 import app.exception.BusinessRuleException;
 import app.exception.NotFoundException;
+import app.repository.InMemoryGymRepository;
+import app.validation.GymValidator;
+
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 public class GymService {
-    private final Map<String, Trainer> trainers = new ConcurrentHashMap<>();
-    private final Map<String, Client> clients = new ConcurrentHashMap<>();
-    
-    private final Map<String, Set<String>> bookings = new ConcurrentHashMap<>();
+    private final InMemoryGymRepository repository = new InMemoryGymRepository();
 
     public synchronized Trainer createTrainer(Trainer trainer) {
-        validateTrainer(trainer);
+        GymValidator.validateTrainer(trainer);
+
         String id = UUID.randomUUID().toString();
         trainer.setId(id);
         trainer.setActiveBookings(0);
-        trainers.put(id, trainer);
-        return trainer;
+
+        repository.saveTrainer(copyTrainer(trainer));
+        return copyTrainer(trainer);
     }
 
-    public Trainer getTrainer(String id) {
-        Trainer trainer = trainers.get(id);
-        if (trainer == null) throw new NotFoundException("Тренер не найден");
-        return trainer;
+    public synchronized Trainer getTrainer(String id) {
+        return copyTrainer(findTrainer(id));
     }
 
-    public List<Trainer> getTrainers(String specialty) {
-        return trainers.values().stream()
-                .filter(t -> specialty == null || specialty.equals(t.getSpecialty()))
+    public synchronized List<Trainer> getTrainers(String specialty) {
+        return repository.findAllTrainers().stream()
+                .filter(trainer -> specialty == null
+                        || specialty.equalsIgnoreCase(trainer.getSpecialty()))
+                .map(GymService::copyTrainer)
                 .collect(Collectors.toList());
     }
 
     public synchronized Trainer updateTrainer(String id, Trainer updated) {
-        validateTrainer(updated);
-        Trainer existing = getTrainer(id);
-        
+        GymValidator.validateTrainer(updated);
+        Trainer existing = findTrainer(id);
+
         if (updated.getMaxCapacity() < existing.getActiveBookings()) {
-            throw new BusinessRuleException("Новая вместимость (" + updated.getMaxCapacity() + 
-                ") не может быть меньше текущего числа записей (" + existing.getActiveBookings() + ")");
+            throw new BusinessRuleException("Новая вместимость (" + updated.getMaxCapacity()
+                    + ") не может быть меньше текущего числа записей ("
+                    + existing.getActiveBookings() + ")");
         }
-        
+
         existing.setName(updated.getName());
         existing.setSpecialty(updated.getSpecialty());
         existing.setMaxCapacity(updated.getMaxCapacity());
-        return existing;
+        return copyTrainer(existing);
     }
 
     public synchronized void deleteTrainer(String id) {
-        if (trainers.remove(id) == null) {
+        if (repository.removeTrainer(id) == null) {
             throw new NotFoundException("Тренер не найден");
         }
-        bookings.values().forEach(clientBookings -> clientBookings.remove(id));
+
+        for (String clientId : repository.removeTrainerFromBookings(id)) {
+            Client client = repository.findClient(clientId);
+            if (client != null) {
+                client.setActiveBookings(client.getActiveBookings() - 1);
+            }
+        }
     }
 
     public synchronized Client createClient(Client client) {
-        validateClient(client);
+        GymValidator.validateClient(client);
+
         String id = UUID.randomUUID().toString();
         client.setId(id);
         client.setActiveBookings(0);
-        clients.put(id, client);
-        bookings.put(id, ConcurrentHashMap.newKeySet()); 
-        return client;
+
+        repository.saveClient(copyClient(client));
+        return copyClient(client);
     }
 
-    public Client getClient(String id) {
-        Client client = clients.get(id);
-        if (client == null) throw new NotFoundException("Клиент не найден");
-        return client;
+    public synchronized Client getClient(String id) {
+        return copyClient(findClient(id));
     }
 
-    public List<Client> getClients(String type) {
-        return clients.values().stream()
-                .filter(c -> type == null || type.equals(c.getType().name()))
+    public synchronized List<Client> getClients(String type) {
+        return repository.findAllClients().stream()
+                .filter(client -> type == null
+                        || type.equalsIgnoreCase(client.getType().name()))
+                .map(GymService::copyClient)
                 .collect(Collectors.toList());
     }
 
     public synchronized Client updateClient(String id, Client updated) {
-        validateClient(updated);
-        Client existing = getClient(id);
-        
+        GymValidator.validateClient(updated);
+        Client existing = findClient(id);
+
         int newLimit = updated.getType().getLimit();
         if (existing.getActiveBookings() > newLimit) {
-            throw new BusinessRuleException("Смена абонемента на " + updated.getType() + 
-                " невозможна: у клиента уже " + existing.getActiveBookings() + " записей (лимит " + newLimit + ")");
+            throw new BusinessRuleException("Смена абонемента на " + updated.getType()
+                    + " невозможна: у клиента уже " + existing.getActiveBookings()
+                    + " записей (лимит " + newLimit + ")");
         }
-        
+
         existing.setName(updated.getName());
         existing.setType(updated.getType());
-        return existing;
+        return copyClient(existing);
     }
 
     public synchronized void deleteClient(String id) {
-        if (clients.remove(id) == null) {
+        if (repository.removeClient(id) == null) {
             throw new NotFoundException("Клиент не найден");
         }
-        Set<String> clientBookings = bookings.remove(id);
+
+        Set<String> clientBookings = repository.removeBookingsForClient(id);
         if (clientBookings != null) {
             for (String trainerId : clientBookings) {
-                Trainer t = trainers.get(trainerId);
-                if (t != null) t.setActiveBookings(t.getActiveBookings() - 1);
+                Trainer trainer = repository.findTrainer(trainerId);
+                if (trainer != null) {
+                    trainer.setActiveBookings(trainer.getActiveBookings() - 1);
+                }
             }
         }
     }
 
     public synchronized void bookSession(String clientId, String trainerId) {
-        Client client = getClient(clientId);
-        Trainer trainer = getTrainer(trainerId);
-        
-        Set<String> clientBookings = bookings.computeIfAbsent(clientId, k -> ConcurrentHashMap.newKeySet());
-        
+        Client client = findClient(clientId);
+        Trainer trainer = findTrainer(trainerId);
+        Set<String> clientBookings = repository.bookingsForClient(clientId);
+
         if (clientBookings.contains(trainerId)) {
             throw new BusinessRuleException("Клиент уже записан к этому тренеру");
         }
-
         if (trainer.getActiveBookings() >= trainer.getMaxCapacity()) {
             throw new BusinessRuleException("У тренера нет свободных мест");
         }
-
-        int limit = client.getType().getLimit();
-        if (client.getActiveBookings() >= limit) {
-            throw new BusinessRuleException("Исчерпан лимит записей по абонементу " + client.getType());
+        if (client.getActiveBookings() >= client.getType().getLimit()) {
+            throw new BusinessRuleException(
+                    "Исчерпан лимит записей по абонементу " + client.getType());
         }
 
         clientBookings.add(trainerId);
@@ -135,26 +143,35 @@ public class GymService {
         trainer.setActiveBookings(trainer.getActiveBookings() + 1);
     }
 
-    private void validateClient(Client client) {
-        if (client == null) throw new IllegalArgumentException("Тело запроса не может быть пустым");
-        if (client.getName() == null || client.getName().trim().isEmpty()) {
-            throw new IllegalArgumentException("Имя клиента не может быть пустым");
+    private Trainer findTrainer(String id) {
+        Trainer trainer = repository.findTrainer(id);
+        if (trainer == null) {
+            throw new NotFoundException("Тренер не найден");
         }
-        if (client.getType() == null) {
-            throw new IllegalArgumentException("Тип абонемента должен быть BASIC или PREMIUM");
-        }
+        return trainer;
     }
 
-    private void validateTrainer(Trainer trainer) {
-        if (trainer == null) throw new IllegalArgumentException("Тело запроса не может быть пустым");
-        if (trainer.getName() == null || trainer.getName().trim().isEmpty()) {
-            throw new IllegalArgumentException("Имя тренера не может быть пустым");
+    private Client findClient(String id) {
+        Client client = repository.findClient(id);
+        if (client == null) {
+            throw new NotFoundException("Клиент не найден");
         }
-        if (trainer.getSpecialty() == null || trainer.getSpecialty().trim().isEmpty()) {
-            throw new IllegalArgumentException("Специализация тренера не может быть пустой");
-        }
-        if (trainer.getMaxCapacity() <= 0) {
-            throw new IllegalArgumentException("Вместимость тренера должна быть больше 0");
-        }
+        return client;
+    }
+
+    private static Trainer copyTrainer(Trainer trainer) {
+        Trainer copy = new Trainer(
+                trainer.getId(),
+                trainer.getName(),
+                trainer.getSpecialty(),
+                trainer.getMaxCapacity());
+        copy.setActiveBookings(trainer.getActiveBookings());
+        return copy;
+    }
+
+    private static Client copyClient(Client client) {
+        Client copy = new Client(client.getId(), client.getName(), client.getType());
+        copy.setActiveBookings(client.getActiveBookings());
+        return copy;
     }
 }

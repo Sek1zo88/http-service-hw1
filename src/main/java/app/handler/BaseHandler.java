@@ -65,6 +65,8 @@ public abstract class BaseHandler implements HttpHandler {
                 throw new IllegalArgumentException("Тело запроса пустое или некорректное");
             }
             return obj;
+        } catch (IllegalArgumentException e) {
+            throw e;
         } catch (Exception e) {
             throw new IllegalArgumentException("Некорректный формат JSON: " + e.getMessage());
         }
