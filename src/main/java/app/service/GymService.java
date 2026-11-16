@@ -1,19 +1,28 @@
 package app.service;
 
-import app.domain.Client;
-import app.domain.Trainer;
-import app.exception.BusinessRuleException;
-import app.exception.NotFoundException;
-import app.repository.InMemoryGymRepository;
-import app.validation.GymValidator;
-
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.springframework.stereotype.Service;
+
+import app.domain.Client;
+import app.domain.ClientType;
+import app.domain.Trainer;
+import app.exception.BusinessRuleException;
+import app.exception.NotFoundException;
+import app.repository.GymRepository;
+import app.validation.GymValidator;
+
+@Service
 public class GymService {
-    private final InMemoryGymRepository repository = new InMemoryGymRepository();
+    private final GymRepository repository;
+
+    public GymService(GymRepository repository) {
+        this.repository = repository;
+    }
 
     public synchronized Trainer createTrainer(Trainer trainer) {
         GymValidator.validateTrainer(trainer);
@@ -83,6 +92,15 @@ public class GymService {
     }
 
     public synchronized List<Client> getClients(String type) {
+        if (type != null) {
+            boolean validType = Arrays.stream(ClientType.values())
+                    .anyMatch(t -> t.name().equalsIgnoreCase(type));
+            if (!validType) {
+                throw new IllegalArgumentException(
+                        "Тип абонемента должен быть BASIC или PREMIUM");
+            }
+        }
+
         return repository.findAllClients().stream()
                 .filter(client -> type == null
                         || type.equalsIgnoreCase(client.getType().name()))
